@@ -9,6 +9,7 @@ print("PyTorch version:[%s]."%(torch.__version__))
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print("device:[%s]."%(device))
 
+# Actor layer construction
 
 class ActorClass(nn.Module):
 
@@ -109,7 +110,7 @@ class PPO:
 
         for i in range(self.K_epoch):
 
-            # GAE batch 계산
+            # GAE calculation
             td_target = r + self.gamma * self.critic.forward(s_prime) * done_mask
             delta = td_target - self.critic.forward(s)
             delta = delta.detach().numpy()
@@ -121,27 +122,25 @@ class PPO:
                 advantage = self.gamma * self.lmbda * advantage + delta_t[0]
                 advantage_lst.append([advantage])
 
-            advantage_lst.reverse()  # 거꾸로 쌓였기 때문에 순방향으로 다시 배열
-            advantage = torch.tensor(advantage_lst, dtype=torch.float)  # tensor로 변환
+            advantage_lst.reverse()  # from "reverse stacked array" to "Forward stacked array"
+            advantage = torch.tensor(advantage_lst, dtype=torch.float)  # transform to tensor
 
             pi, pi_out = self.actor.forward(s, softmax_dim=1)
             pi_a = pi_out.gather(1, a)
 
             # Loss_clip을 구하기 위해 ratio(r_t(thete)) 계산
-            # a/b == exp(log(a)-log(b)) : 이 형태가 연산이 효율적임, prob_a : old policy(경험 쌓을 때 policy 확률)
+            # a/b == exp(log(a)-log(b)) : 이 형태가 연산이 효율적임, prob_a : old policy
             ratio = torch.exp(torch.log(pi_a) - torch.log(prob_a))  # new policy/ old policy
 
             surr1 = ratio * advantage
-            # PPO clip
-            surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * advantage
+            surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * advantage # PPO clip
 
             # Loss_clip 적용
             # -policy loss + value loss
             # policy loss : maximize(gradient_ascent), value loss : minimize(gradient_descent)
             # Policy gradient는 목적함수(J)를 최대화 시키는 것이 목표.
-            # .detach의 경우 gradient flow 발생 X, TD_target이 만들어지기 까지 앞의 그래프는 다 뗀다는 의미(상수로 본다)
-            # (중요!).detach를 안하는 경우 loss를 줄이는 방향으로 update가 됨. target은 변하면 안됨
-            # tensorflow는 placeholder로..
+            # .detach의 경우 gradient flow 발생 X, TD_target이 만들어지기까지 앞의 그래프는 다 뗀다는 의미(상수로 본다)
+            # (중요!).detach를 안하는 경우 loss를 줄이는 방향으로 update가 됨. target은 변하면 안됨.
             # (중요!) ratio가 clip의 범위를 넘어간다? 그때의 sample은 학습 X, 버리는 효과!
             loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(self.critic.forward(s), td_target.detach())
 
@@ -153,13 +152,15 @@ class PPO:
             self.critic.optimizer.step()
 
     def make_batch(self):
+        # initialize batch
         s_lst, a_lst, r_lst, s_prime_lst, prob_a_lst, done_lst = [], [], [], [], [], []
 
         for transition in self.data:
             s, a, r, s_prime, prob_a, done = transition
-
+            
+            # storing data
             s_lst.append(s)  # s:numpy array, shape:[...]
-            a_lst.append([a])  # s와의 shape을 맞춰주기 위해서 []를 취하고 append/ pytorch unsqueeze(차원을 늘려주는 함수) 방식도 있다.
+            a_lst.append([a])  # s와의 shape을 맞추기 위해서 [](array)를 취하고 append, pytorch unsqueeze(차원 증가)방식도 있다.
             r_lst.append([r])
             s_prime_lst.append(s_prime)
             prob_a_lst.append([prob_a])
@@ -169,8 +170,10 @@ class PPO:
                 done_mask = 0
             else:
                 done_mask = 1
+                
             done_lst.append([done_mask])
 
+        #transform to tensor
         s, a, r, s_prime, done_mask, prob_a = torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst), \
                                               torch.tensor(r_lst), torch.tensor(s_prime_lst, dtype=torch.float), \
                                               torch.tensor(done_lst, dtype=torch.float), torch.tensor(prob_a_lst)
@@ -180,6 +183,8 @@ class PPO:
     def put_data(self, transition):
         self.data.append(transition)
 
+        
+###### main ######
 env = gym.make('CartPole-v1')
 score = 0.0
 print_interval = 20
@@ -196,7 +201,6 @@ for n_epi in range(1000):
     while not done:
         for t in range(T_horizon):
             prob, prob_out = agent.actor(torch.Tensor(s), -1)
-            # prob = agent.choose_action(state=torch.from_numpy(s).float)
 
             #env.render()
             a = prob.sample().item()
